@@ -19,9 +19,9 @@ attention) are measured in TFLOP/s and honest % of cuBLAS / FlashInfer.
 | # | Kernel | Status | Result |
 |---|---|---|---|
 | 1 | **SiLU** (`silu.cu`) | ✅ | 89% of peak HBM (float4), correct to 3e-7 |
-| 2 | **RMSNorm** (`rmsnorm.cu`) | ✅ | 82% of peak HBM — **4.2× faster than `torch`** |
-| 3 | LayerNorm | 🚧 next | — |
-| 4 | KV-cache update (scatter) | ⏳ | — |
+| 2 | **RMSNorm** (`rmsnorm.cu`) | ✅ | 82% of peak HBM — **ties vLLM's fused kernel**, 4.2× `torch` |
+| 3 | **LayerNorm** (`layernorm.cu`) | ✅ | 80% of peak HBM — 1.2× `torch.layer_norm` |
+| 4 | KV-cache update (scatter) | 🚧 next | — |
 | 5 | Top-k | ⏳ | — |
 | 6 | Tiled MatMul | ⏳ | vs cuBLAS (learning GEMM) |
 | 7 | **FlashAttention** | ⏳ | the capstone |
@@ -42,11 +42,25 @@ sum `x²` over a row). `[32768, 4096]`, fp32:
 |---|---|---:|---:|
 | **v1 shared** | shared-memory tree reduction, scalar loads | **3,217 GB/s** | **82%** |
 | v2 shuffle | warp-shuffle reduction + float4 | 2,937 GB/s | 75% |
-| `torch.nn.functional.rms_norm` | (unfused reference) | 768 GB/s | 20% |
+| vLLM fused `rms_norm` (fp16) | production hand-tuned kernel | — | **82%** |
+| `torch.nn.functional.rms_norm` | unfused reference | 768 GB/s | 20% |
 
-Honest note: the "fancier" v2 (warp-shuffle + float4) came out **slower** than the
-plain v1 — the reduction was never the bottleneck (memory was), and v1 already sits
-near the HBM ceiling, so the extra machinery only added overhead. Measure, don't assume.
+Two honest notes:
+- The "fancier" v2 (warp-shuffle + float4) came out **slower** than v1 — the reduction
+  was never the bottleneck (memory was), and v1 already sits near the HBM ceiling, so
+  the extra machinery only added overhead. Measure, don't assume.
+- **vs vLLM:** for a memory-bound kernel, *% of peak HBM is the ceiling* — you can't beat
+  the memory bus. Ours and vLLM's fused kernel both hit **82%**, i.e. we're at the same
+  place vLLM is. (vLLM runs fp16 so its wall-clock is ~2× lower — it moves half the bytes —
+  but the *efficiency* is identical.) The comparison that leaves real room is the
+  compute-bound kernels (matmul vs cuBLAS, attention vs FlashInfer) — those come later.
+
+**LayerNorm** — two reductions (mean + variance) in one pass. `[32768, 4096]`, fp32:
+
+| version | bandwidth | % of peak |
+|---|---:|---:|
+| **ours** | **3,135 GB/s** | **80%** |
+| `torch.nn.functional.layer_norm` (fused) | 2,541 GB/s | 65% |
 
 ## Build & run
 
