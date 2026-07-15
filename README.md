@@ -24,7 +24,7 @@ attention) are measured in TFLOP/s and honest % of cuBLAS / FlashInfer.
 | 4 | KV-cache update (scatter) | 🚧 next | — |
 | 5 | Top-k | ⏳ | — |
 | 6 | Tiled MatMul | ⏳ | vs cuBLAS (learning GEMM) |
-| 7 | **FlashAttention** | ⏳ | the capstone |
+| 7 | **FlashAttention** (`attention.cu`) | ✅ | 7.9 TFLOP/s (0.40× torch SDPA), O(d) memory, causal |
 
 ## Results (H100 NVL, fp32)
 
@@ -61,6 +61,24 @@ Two honest notes:
 |---|---:|---:|
 | **ours** | **3,135 GB/s** | **80%** |
 | `torch.nn.functional.layer_norm` (fused) | 2,541 GB/s | 65% |
+
+**FlashAttention** — `O = softmax(QKᵀ/√d)V` without ever building the n×n score
+matrix. The whole point is *memory*: at long context that matrix is enormous
+(H·N²), so it streams over keys with an online softmax (running max + sum — the
+softmax worklog's v6 reduction) and keeps memory at O(d). 32 heads, seqlen 2048,
+head_dim 64, causal, fp32:
+
+| version | idea | TFLOP/s | vs torch |
+|---|---|---:|---:|
+| v1 per-query | one thread per query, stream keys | 2.8 | 0.14× |
+| **v2 tiled-smem** | stage K/V tiles in shared memory, shared across a query block | **7.9** | **0.40×** |
+| `torch` SDPA (FlashAttention-2 / cuDNN) | production kernel | 19.6 | 1.00× |
+
+Both versions match a double-precision reference to 4.9e-8, and use **0 GB** for
+scores where naive attention needs 0.5 GB (and TB at long context). We don't beat
+FlashAttention-2 (it uses tensor cores + a far deeper tiling than v2) — the win is
+implementing the algorithm correctly and seeing shared-memory tiling take it 2.8×
+(v1 → v2), from 0.14× to 0.40× of the production kernel.
 
 ## Build & run
 
