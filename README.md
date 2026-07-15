@@ -26,9 +26,27 @@ attention) are measured in TFLOP/s and honest % of cuBLAS / FlashInfer.
 | 6 | Tiled MatMul | ⏳ | vs cuBLAS (learning GEMM) |
 | 7 | **FlashAttention** (`attention.cu`) | ✅ | 7.9 TFLOP/s (0.40× torch SDPA), O(d) memory, causal |
 
+## Results at a glance
+
+Two stories. **Memory-bound kernels** (norms, activations) are capped by HBM
+bandwidth — the goal is % of peak, and hand-written kernels reach it (matching
+vLLM's fused kernel, far past PyTorch's unfused one):
+
+![memory-bound kernels vs PyTorch and vLLM](results/memory_bound.png)
+
+**FlashAttention** is compute-bound — here the goal is TFLOP/s. We don't beat
+PyTorch's FlashAttention-2 (tensor cores + deeper tiling), but the worklog shows
+shared-memory tiling earning a 2.8× jump on the same algorithm:
+
+![FlashAttention v1 vs v2 vs PyTorch SDPA](results/flash_attention.png)
+
+Charts are generated from the measured numbers by `results/generate_charts.py`.
+
 ## Results (H100 NVL, fp32)
 
 **SiLU** — `out = x * sigmoid(x)`, memory-bound (read x, write out):
+
+![SiLU v1 scalar vs v2 float4](results/silu.png)
 
 | version | idea | bandwidth | % of peak |
 |---|---|---:|---:|
